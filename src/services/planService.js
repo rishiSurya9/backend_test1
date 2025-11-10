@@ -55,3 +55,20 @@ export function describePlanPricing(plan) {
     tokenValueInr: getTokenValueInr()
   };
 }
+
+const DEFAULT_TOKEN_PLAN_NAME = 'Direct Token Purchase';
+
+export async function getDefaultTokenPlan(client = prisma) {
+  let plan = await client.plan.findUnique({ where: { name: DEFAULT_TOKEN_PLAN_NAME } });
+  if (!plan) {
+    plan = await client.plan.create({
+      data: {
+        name: DEFAULT_TOKEN_PLAN_NAME,
+        priceUsd: 0,
+        tokens: 0,
+        active: true
+      }
+    });
+  }
+  return plan;
+}
