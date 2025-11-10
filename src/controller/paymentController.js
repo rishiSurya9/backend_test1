@@ -1,13 +1,13 @@
 import { prisma } from '../prisma/client.js';
 import { env } from '../config/env.js';
 import { createInvoiceForTokenPurchase } from '../services/invoiceService.js';
-import { describePlanPricing } from '../services/planService.js';
-import { getTokenValueInr } from '../services/tokenService.js';
+import { getDefaultTokenPlan } from '../services/planService.js';
 import { eventBus } from '../events/eventBus.js';
 import { EVENTS } from '../events/eventTypes.js';
 import { distributePurchaseCommission } from '../services/commissionService.js';
 import { recordPlanRenewal } from '../services/activityService.js';
 import { requireTransactionPin } from '../services/pinService.js';
+import { getTokenValueInr, tokensToInr } from '../services/tokenService.js';
 
 function assert(condition, message = 'Bad Request', code = 400) {
   if (!condition) {
@@ -318,22 +318,21 @@ export async function createAddFundsOrder(req, res, next) {
   } catch (err) { next(err); }
 }
 
-// Create token purchase order for a given plan
+// Purchase tokens by specifying desired quantity (debited from main wallet)
 export async function createTokenPurchaseOrder(req, res, next) {
   try {
-    const { planId, planName, pin } = req.body || {};
+    const { tokens, pin } = req.body || {};
     const userId = req.user.id;
 
-    let plan = null;
-    if (planId) plan = await prisma.plan.findUnique({ where: { id: String(planId) } });
-    if (!plan && planName) plan = await prisma.plan.findUnique({ where: { name: String(planName) } });
-    if (!plan || !plan.active) {
-      const err = new Error('Plan not found'); err.status = 404; throw err;
-    }
+    const requestedTokens = Number(tokens);
+    assert(Number.isFinite(requestedTokens) && requestedTokens > 0, 'tokens must be > 0');
 
-    const { priceUsd, amountInr, tokens, tokenValueInr } = describePlanPricing(plan);
-    assert(amountInr > 0, 'Plan amount not configured');
-    assert(tokens > 0, 'Plan token amount not configured');
+    const tokenValueInr = getTokenValueInr();
+    const amountInr = tokensToInr(requestedTokens, tokenValueInr);
+    assert(amountInr > 0, 'Unable to compute purchase amount');
+
+    const rate = Number(env.USD_INR_RATE || 1) || 1;
+    const priceUsd = Number((amountInr / rate).toFixed(2));
 
     await requireTransactionPin(userId, pin);
 
@@ -345,7 +344,7 @@ export async function createTokenPurchaseOrder(req, res, next) {
         where: { userId },
         data: {
           mainBalance: { decrement: amountInr },
-          tokenBalance: { increment: tokens }
+          tokenBalance: { increment: requestedTokens }
         }
       });
 
@@ -359,18 +358,19 @@ export async function createTokenPurchaseOrder(req, res, next) {
           walletFrom: 'MAIN',
           walletTo: 'TOKEN',
           provider: 'SYSTEM',
-          description: `Token purchase: ${plan.name}`,
+          description: `Token purchase (${requestedTokens})`,
           meta: {
-            planId: plan.id,
-            planName: plan.name,
+            mode: 'DIRECT_TOKEN_PURCHASE',
             priceUsd,
             amountInr,
-            tokens,
+            tokens: requestedTokens,
             rate: Number(env.USD_INR_RATE || 1),
             tokenValueInr
           }
         }
       });
+
+      const plan = await getDefaultTokenPlan(tx);
 
       const purchase = await tx.tokenPurchase.create({
         data: {
@@ -380,7 +380,7 @@ export async function createTokenPurchaseOrder(req, res, next) {
           status: 'SUCCESS',
           priceUsd,
           priceInr: amountInr,
-          tokens
+          tokens: requestedTokens
         }
       });
 
@@ -389,10 +389,10 @@ export async function createTokenPurchaseOrder(req, res, next) {
         tokenPurchase: purchase,
         planName: plan.name,
         amountInr,
-        tokens
+        tokens: requestedTokens
       }, tx);
 
-      return { wallet: updatedWallet, trx, purchase, invoice };
+      return { wallet: updatedWallet, trx, purchase, invoice, plan };
     });
 
     eventBus.emit(EVENTS.TOKEN_PURCHASED, {
@@ -400,7 +400,7 @@ export async function createTokenPurchaseOrder(req, res, next) {
       tokens: Number(result.purchase.tokens),
       amount: Number(result.trx.amount),
       currency: result.trx.currency,
-      planName: plan.name,
+      planName: result.plan?.name || 'Token Purchase',
       tokenValueInr
     });
 
@@ -408,7 +408,7 @@ export async function createTokenPurchaseOrder(req, res, next) {
       ok: true,
       tokenPurchaseId: result.purchase.id,
       transactionId: result.trx.id,
-      tokens,
+      tokens: requestedTokens,
       tokenValueInr,
       amountInr,
       invoiceId: result.invoice?.id || null,
