@@ -28,7 +28,7 @@ import tempClearRouter from './routes/tempClearRoute.js';
 registerNotificationHandlers();
 
 const sanitizeOrigin = (origin = '') => origin.replace(/\/+$/, '').trim();
-const allowedOrigins = ['http://localhost:3000'];
+const allowedOrigins = ['https://ico-u1wj.onrender.com'];
 
 const rawBodySaver = (req, _res, buf) => {
   if (buf && buf.length) {
