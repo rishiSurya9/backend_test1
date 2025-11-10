@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: mlm-auth-api
+    env: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install && npm run prisma:generate
+    startCommand: npm run start:render
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.1
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_URL
+        value: https://mlm-auth-api.onrender.com
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RAZORPAY_ACCOUNT_NUMBER
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: MIN_WITHDRAW_AMOUNT
+        value: "100"
+      - key: WITHDRAW_ADMIN_THRESHOLD
+        value: "5000"
+      - key: ADMIN_USER_IDS
+        sync: false
+      - key: ADMIN_EMAILS
+        sync: false

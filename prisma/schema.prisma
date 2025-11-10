@@ -1,0 +1,297 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  username           String?  @unique
+  phone              String   @unique
+  email              String?  @unique
+  passwordHash       String?  // bcrypt hash
+  pinHash            String?  // 4-digit PIN hashed via bcrypt
+  totpSecret         String?  // base32 secret for TOTP
+  totpEnabled        Boolean  @default(false)
+  emailVerifiedAt    DateTime?
+  phoneVerifiedAt    DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  sponsorId          String?
+  parentId           String?
+  path               String?  @db.VarChar(512)
+  matrixLevel        Int      @default(0)
+  positionIndex      Int?
+  isActive           Boolean  @default(false)
+  activeUntil        DateTime?
+  lastPlanRenewalAt  DateTime?
+  activityStatus     ActivityStatus @default(LAPSED)
+  qualificationLevel Int      @default(0)
+
+  otps               OTP[]
+  wallet             Wallet?
+  transactions       Transaction[]
+  tokenPurchases     TokenPurchase[]
+  invoices           Invoice[]
+  notifications      Notification[]
+  sponsoredUsers     User[]   @relation("UserSponsor")
+  sponsor            User?    @relation("UserSponsor", fields: [sponsorId], references: [id])
+  children           User[]   @relation("MatrixParent")
+  parent             User?    @relation("MatrixParent", fields: [parentId], references: [id])
+  availableSlot      AvailablePosition?
+  commissionsReceived CommissionHistory[] @relation("CommissionRecipient")
+  commissionsGenerated CommissionHistory[] @relation("CommissionSource")
+  levelQualifications LevelQualificationHistory[]
+  activityLogs       ActivityHistory[]
+
+  @@index([sponsorId(length: 64)])
+  @@index([parentId(length: 64)])
+  @@index([path(length: 128)])
+}
+
+model OTP {
+  id          String   @id @default(cuid())
+  type        OTPType
+  identifier  String   // phone or email
+  codeHash    String   // sha256(code + salt)
+  salt        String
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id])
+  userId      String?
+
+  @@index([identifier, type])
+  @@index([expiresAt])
+}
+
+enum OTPType {
+  PHONE
+  EMAIL
+}
+
+// Wallet holds user balances across different buckets
+model Wallet {
+  id              String   @id @default(cuid())
+  user            User     @relation(fields: [userId], references: [id])
+  userId          String   @unique
+  mainBalance     Decimal  @default(0.00) @db.Decimal(18, 2)
+  referralBalance Decimal  @default(0.00) @db.Decimal(18, 2)
+  tokenBalance    Decimal  @default(0.0000) @db.Decimal(18, 4)
+  currency        String   @default("INR")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Ledger of wallet-affecting events
+model Transaction {
+  id           String           @id @default(cuid())
+  user         User             @relation(fields: [userId], references: [id])
+  userId       String
+  type         TransactionType
+  status       TransactionStatus @default(PENDING)
+  provider     PaymentProvider?
+  amount       Decimal           @db.Decimal(18, 2)
+  currency     String            @default("INR")
+  walletFrom   WalletBucket?
+  walletTo     WalletBucket?
+  referenceId  String?           // e.g., Razorpay order/payment id, Stripe pi id, payout id
+  description  String?
+  meta         Json?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  tokenPurchase TokenPurchase?  @relation("TransactionTokenPurchase")
+
+  @@index([userId, createdAt])
+  @@index([referenceId])
+}
+
+enum WalletBucket {
+  MAIN
+  REFERRAL
+  TOKEN
+}
+
+enum TransactionType {
+  ADD_FUNDS
+  WITHDRAW
+  TRANSFER_INTERNAL
+  TOKEN_PURCHASE
+  COMMISSION
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum PaymentProvider {
+  RAZORPAY
+  STRIPE
+  SYSTEM
+}
+
+// Fixed product plans for token purchase
+model Plan {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  // Price in USD for the plan
+  priceUsd  Decimal  @db.Decimal(18, 2)
+  // Precomputed tokens granted for this plan
+  tokens    Decimal  @db.Decimal(18, 4)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases TokenPurchase[]
+}
+
+// A user's token purchase bound to a payment transaction
+model TokenPurchase {
+  id            String      @id @default(cuid())
+  user          User        @relation(fields: [userId], references: [id])
+  userId        String
+  plan          Plan        @relation(fields: [planId], references: [id])
+  planId        String
+  transaction   Transaction @relation("TransactionTokenPurchase", fields: [transactionId], references: [id])
+  transactionId String      @unique
+  status        PurchaseStatus @default(PENDING)
+  priceUsd      Decimal     @db.Decimal(18, 2)
+  priceInr      Decimal     @db.Decimal(18, 2)
+  tokens        Decimal     @db.Decimal(18, 4)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  invoice       Invoice?    @relation("TokenPurchaseInvoice")
+
+  @@index([userId, createdAt])
+}
+
+enum PurchaseStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+// Stored PDF invoice for a token purchase
+model Invoice {
+  id              String        @id @default(cuid())
+  user            User          @relation(fields: [userId], references: [id])
+  userId          String
+  tokenPurchase   TokenPurchase @relation("TokenPurchaseInvoice", fields: [tokenPurchaseId], references: [id])
+  tokenPurchaseId String        @unique
+  // Binary PDF data
+  pdf             Bytes
+  amount         Decimal        @db.Decimal(18, 2)
+  currency       String         @default("INR")
+  tokens         Decimal        @db.Decimal(18, 4)
+  planName       String
+  createdAt      DateTime       @default(now())
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model AvailablePosition {
+  id         Int      @id @default(autoincrement())
+  userId     String   @unique
+  depth      Int
+  childCount Int      @default(0)
+  path       String   @db.VarChar(512)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([depth, createdAt])
+  @@index([createdAt, id])
+}
+
+model CommissionSetting {
+  level     Int      @id
+  percent   Decimal  @db.Decimal(5, 2)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CommissionHistory {
+  id                  String   @id @default(cuid())
+  userId              String
+  sourceUserId        String
+  level               Int
+  amount              Decimal  @db.Decimal(18, 2)
+  currency            String   @default("INR")
+  status              CommissionStatus
+  reason              String?
+  walletTransactionId String?
+  eventRef            String
+  createdAt           DateTime @default(now())
+
+  user       User @relation("CommissionRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  sourceUser User @relation("CommissionSource", fields: [sourceUserId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([sourceUserId, createdAt])
+  @@unique([eventRef, userId])
+}
+
+model LevelQualificationHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  level       Int
+  status      QualificationStatus
+  qualifiedAt DateTime @default(now())
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId(length: 64), level])
+}
+
+model ActivityHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  period    DateTime
+  status    ActivityStatus
+  checkedAt DateTime @default(now())
+  notes     String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, period], name: "user_period")
+  @@index([status, period])
+}
+
+enum CommissionStatus {
+  PAID
+  SKIPPED
+}
+
+enum QualificationStatus {
+  QUALIFIED
+  REVOKED
+}
+
+enum ActivityStatus {
+  ACTIVE
+  LAPSED
+}
