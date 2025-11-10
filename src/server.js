@@ -28,13 +28,7 @@ import tempClearRouter from './routes/tempClearRoute.js';
 registerNotificationHandlers();
 
 const sanitizeOrigin = (origin = '') => origin.replace(/\/+$/, '').trim();
-const allowedOrigins = (() => {
-  const parsed = String(env.APP_URL || '')
-    .split(',')
-    .map(sanitizeOrigin)
-    .filter(Boolean);
-  return parsed.length ? parsed : ['http://localhost:3000'];
-})();
+const allowedOrigins = ['http://localhost:3000'];
 
 const rawBodySaver = (req, _res, buf) => {
   if (buf && buf.length) {
